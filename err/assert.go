@@ -13,8 +13,8 @@ func Assert(cond bool, msg string) {
 		} else {
 			fmt.Printf("Assertion failed: %s\n", msg)
 		}
+		panic(msg)
 	}
-	panic(msg)
 }
 
 func SoftAssert(cond bool, msg string) {

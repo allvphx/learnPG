@@ -28,8 +28,10 @@ func NewTestTupleDescValuePair(n uint) (*TupleDesc, []Datum) {
 }
 
 func TestHeapFormTuple(t *testing.T) {
-	attrLen := uint(5)
-	desc, values := NewTestTupleDescValuePair(attrLen)
-	tuple := HeapFormTuple(desc, values, nil)
-	err.Jprint(tuple)
+	for i := 0; i < 100; i++ {
+		attrLen := uint(5)
+		desc, values := NewTestTupleDescValuePair(attrLen)
+		tuple := HeapFormTuple(desc, values, nil)
+		err.Jprint(tuple)
+	}
 }

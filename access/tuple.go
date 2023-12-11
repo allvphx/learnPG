@@ -3,6 +3,7 @@ package access
 import (
 	"LearnPG/err"
 	"fmt"
+	"unsafe"
 )
 
 const (
@@ -57,7 +58,7 @@ func HeapFormTuple(desc *TupleDesc, values []Datum, isNull []bool) *HeapTuple {
 			tuple.Data.NULLBits = make([]byte, AlignByteLen(uintptr(numOfAttr)))
 		}
 	}
-	tuple.DataLen = uint(AlignByteLen(HeapComputeDataSize(desc, values, isNull)))
+	tuple.DataLen = uint(HeapComputeDataSize(desc, values, isNull))
 	tuple.Data.Padding = make([]byte, tuple.DataLen)
 	tuple.Self = nil
 	tuple.TableOID = InvalidOID
@@ -82,11 +83,12 @@ func (c *HeapTuple) HeapFillTuple(desc *TupleDesc, values []Datum, isNull []bool
 	for i := uz; i < desc.NAttr; i++ {
 		attrLen := desc.GetAttr(i).Len
 		for j := uz; j < attrLen; j++ {
-			c.Data.Padding[offset+j] = (byte)(values[i])
+			c.Data.Padding[offset+j] = *(*byte)(unsafe.Pointer(uintptr(values[i]) + uintptr(j)))
 		}
 		offset += attrLen
 	}
-	err.Assert(offset == c.DataLen, "heap filling got error: the total offset does not match value length")
+	err.Assert(offset == c.DataLen,
+		fmt.Sprintf("heap filling got error: the total offset (%d) does not match value length (%d)", offset, c.DataLen))
 	return c
 }
 
