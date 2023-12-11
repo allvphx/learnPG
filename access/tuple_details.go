@@ -21,7 +21,7 @@ func AlignByteLen(len uintptr) uintptr {
 	return MaxAlign(len) / ByteLen
 }
 
-func (c *HeapTupleHeader) SetNull(i uint, isNull bool) {
+func (c *HeapTupleHeader) SetNull(i uint32, isNull bool) {
 	if c.NULLBits == nil {
 		panic("the null bits are not initialized")
 	}

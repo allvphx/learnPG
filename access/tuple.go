@@ -1,13 +1,12 @@
 package access
 
 import (
-	"LearnPG/err"
+	"LearnPG/errf"
 	"fmt"
-	"unsafe"
 )
 
 const (
-	uz uint = 0
+	uz uint32 = 0
 )
 
 type DatumTupleFields struct {
@@ -29,13 +28,13 @@ type HeapTupleHeader struct {
 }
 
 type HeapTuple struct {
-	DataLen  uint
+	DataLen  uint32
 	Self     ItemPointerData
 	TableOID OID
 	Data     HeapTupleHeader
 }
 
-func HeapFormTuple(desc *TupleDesc, values []Datum, isNull []bool) *HeapTuple {
+func HeapFormTuple(desc *TupleDesc, values []*Datum, isNull []bool) *HeapTuple {
 	var tuple *HeapTuple = &HeapTuple{}
 	tuple.Data = HeapTupleHeader{}
 
@@ -58,7 +57,7 @@ func HeapFormTuple(desc *TupleDesc, values []Datum, isNull []bool) *HeapTuple {
 			tuple.Data.NULLBits = make([]byte, AlignByteLen(uintptr(numOfAttr)))
 		}
 	}
-	tuple.DataLen = uint(HeapComputeDataSize(desc, values, isNull))
+	tuple.DataLen = uint32(HeapComputeDataSize(desc, values, isNull))
 	tuple.Data.Padding = make([]byte, tuple.DataLen)
 	tuple.Self = nil
 	tuple.TableOID = InvalidOID
@@ -66,12 +65,12 @@ func HeapFormTuple(desc *TupleDesc, values []Datum, isNull []bool) *HeapTuple {
 	td := &tuple.Data
 	td.CurrentTID = nil
 	// Set Datum length, TypeID, Mod, and NAttributes
-	// Hoff is not needed in Golang, since we do not need offset for data field.
+	// Hoff is not needed in Golang, since we do not need offset for Data field.
 
 	return tuple.HeapFillTuple(desc, values, isNull)
 }
 
-func (c *HeapTuple) HeapFillTuple(desc *TupleDesc, values []Datum, isNull []bool) *HeapTuple {
+func (c *HeapTuple) HeapFillTuple(desc *TupleDesc, values []*Datum, isNull []bool) *HeapTuple {
 	if c.Data.NULLBits != nil {
 		for i := uz; i < c.DataLen; i++ {
 			c.Data.SetNull(i, isNull[i])
@@ -82,17 +81,16 @@ func (c *HeapTuple) HeapFillTuple(desc *TupleDesc, values []Datum, isNull []bool
 	offset := uz
 	for i := uz; i < desc.NAttr; i++ {
 		attrLen := desc.GetAttr(i).Len
-		for j := uz; j < attrLen; j++ {
-			c.Data.Padding[offset+j] = *(*byte)(unsafe.Pointer(uintptr(values[i]) + uintptr(j)))
-		}
+		data := values[i].buf.Bytes()
+		c.Data.Padding = append(c.Data.Padding, data...)
 		offset += attrLen
 	}
-	err.Assert(offset == c.DataLen,
-		fmt.Sprintf("heap filling got error: the total offset (%d) does not match value length (%d)", offset, c.DataLen))
+	errf.Assert(offset == c.DataLen,
+		fmt.Sprintf("heap filling got errf: the total offset (%d) does not match value length (%d)", offset, c.DataLen))
 	return c
 }
 
-func HeapComputeDataSize(desc *TupleDesc, values []Datum, isNull []bool) uintptr {
+func HeapComputeDataSize(desc *TupleDesc, values []*Datum, isNull []bool) uintptr {
 	var dataLen uintptr = 0
 	for i := uz; i < desc.NAttr; i++ {
 		if isNull != nil && isNull[i] {

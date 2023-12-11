@@ -1,4 +1,4 @@
-package err
+package errf
 
 import (
 	"fmt"

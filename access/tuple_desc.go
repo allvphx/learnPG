@@ -16,12 +16,12 @@ type Constraints struct {
 }
 
 type FormDataAttribute struct {
-	Len uint
+	Len uint32
 }
 
 // TupleDesc used to handle user attributes.
 type TupleDesc struct {
-	NAttr        uint
+	NAttr        uint32
 	TypeID       OID // the TypeID indicates the specific type of fields
 	TypeModifier int32
 	TupleCons    *Constraints // constraints
@@ -29,6 +29,6 @@ type TupleDesc struct {
 	Attrs        []FormDataAttribute
 }
 
-func (c *TupleDesc) GetAttr(i uint) *FormDataAttribute {
+func (c *TupleDesc) GetAttr(i uint32) *FormDataAttribute {
 	return &c.Attrs[i]
 }
