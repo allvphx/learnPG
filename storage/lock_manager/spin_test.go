@@ -2,12 +2,13 @@ package lock_manager
 
 import (
 	"fmt"
+	"math/rand"
 	"sync"
 	"testing"
 	"time"
 )
 
-func benchmark(locker *SpinLock, nRoutine int, nOperation int) {
+func benchmark(locker *SpinLock, nRoutine, nOperation, opLen int) {
 	wg := sync.WaitGroup{}
 	start := time.Now()
 	sharedValue := 0
@@ -15,9 +16,12 @@ func benchmark(locker *SpinLock, nRoutine int, nOperation int) {
 		wg.Add(1)
 		go func(op int, lock *SpinLock, value *int) {
 			//s := time.Now()
+			randGen := rand.NewSource(int64(op))
 			for j := 0; j < nOperation; j++ {
 				locker.Lock()
-				*value = op
+				for k := 0; k < opLen; k++ {
+					*value += int(randGen.Int63() * (randGen.Int63()%3 - 1))
+				}
 				locker.Unlock()
 			}
 
@@ -33,33 +37,31 @@ func benchmark(locker *SpinLock, nRoutine int, nOperation int) {
 }
 
 // Benchmark result:
-// 1 routine:
-//Throughput is 75061550.47 op/s
-//Throughput is 73676222.47 op/s
-//Throughput is 78658402.29 op/s
-//Throughput is 26402082.60 op/s
-//
-// 10 routine:
-//Throughput is 3676641.71 op/s
-//Throughput is 40516570.06 op/s
-//Throughput is 18902551.86 op/s
-//Throughput is 7157768.31 op/s
-//
-// 100 routine:
-//Throughput is 315290.29 op/s
-//Throughput is 34539842.26 op/s
-//Throughput is 13457773.42 op/s
-//Throughput is 6735421.85 op/s
+// 1 routine, 1 RMW: the channel based lock has higher overhead.
+//Throughput is 53304051.64 op/s
+//Throughput is 54491161.53 op/s
+//Throughput is 57990849.04 op/s
+//Throughput is 25324918.71 op/s
+// 100 routine, 1 RMW: the spin lock is suitable for short instructions.
+//Throughput is 241750.23 op/s
+//Throughput is 21625016.63 op/s
+//Throughput is 14612141.60 op/s
+//Throughput is 5840466.52 op/s
+// 100 routine, 10 RMW: as instruction length goes high, the Golang native lock is the best.
+//Throughput is 190358.77 op/s
+//Throughput is 5872760.13 op/s
+//Throughput is 10242722.93 op/s
+//Throughput is 4616589.37 op/s
 
 func TestSpinLock(t *testing.T) {
-	r, o := 100, 10000
+	r, b, o := 1, 10000, 1
 	var lock *SpinLock
 	lock = NewSpinLockWithType(BusyLoop)
-	benchmark(lock, r, o)
+	benchmark(lock, r, b, o)
 	lock = NewSpinLockWithType(NoBusyLoop)
-	benchmark(lock, r, o)
+	benchmark(lock, r, b, o)
 	lock = NewSpinLockWithType(Native)
-	benchmark(lock, r, o)
+	benchmark(lock, r, b, o)
 	lock = NewSpinLockWithType(ChannelBased)
-	benchmark(lock, r, o)
+	benchmark(lock, r, b, o)
 }
