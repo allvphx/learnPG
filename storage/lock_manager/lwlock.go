@@ -4,15 +4,20 @@ import "sync/atomic"
 
 type lwDebugger struct {
 	NWaiters atomic.Uint32
+	Owner    *Routine
 }
 
 // LWLock lightweight lock
 type LWLock struct {
-	tranche uint16
-	state   atomic.Uint32
-	waiters ProcListHead
+	Tranche uint16
+	State   atomic.Uint32
+	Waiters ProcListHead
+	debug   *lwDebugger // debug fields
+}
 
-	// debug fields
+type NamedLWLockTranche struct {
+	ID   int
+	Name string
 }
 
 type LWLockMode uint8

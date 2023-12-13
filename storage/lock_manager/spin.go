@@ -14,7 +14,8 @@ const (
 	NoBusyLoop          = SpinLockType(1) // if we enable the explicit context switch for busy-loop goroutines, reducing CPU consumption.
 	ChannelBased        = SpinLockType(2)
 	Native              = SpinLockType(3) // native sync.Mutex
-	DefaultSpinLockType = NoBusyLoop      // after benchmarking, the NoBusyLoop is the best one.
+	DefaultSpinLockType = NoBusyLoop
+	// after benchmarking, the NoBusyLoop is the best one for short instruction cases.
 )
 
 // SpinLock is generally CPU-intensive as it continuously poll a condition.
@@ -22,7 +23,7 @@ const (
 // the overhead of suspending and resuming a thread (like in a traditional mutex lock) is higher than the spin.
 // In Golang, the scheduling time is smaller and the spin lock is less a reasonable design.
 // From document: Share memory by communicating; don't communicate by sharing memory.
-// This implementation is just a benchmark to investigate the performance of spin lock in the context of Golang.
+// This implementation is just a benchmarkSpinLock to investigate the performance of spin lock in the context of Golang.
 type SpinLock struct {
 	state    atomic.Uint32
 	lockType SpinLockType

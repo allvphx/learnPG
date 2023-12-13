@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func benchmark(locker *SpinLock, nRoutine, nOperation, opLen int) {
+func benchmarkSpinLock(locker *SpinLock, nRoutine, nOperation, opLen int) {
 	wg := sync.WaitGroup{}
 	start := time.Now()
 	sharedValue := 0
@@ -57,11 +57,11 @@ func TestSpinLock(t *testing.T) {
 	r, b, o := 1, 10000, 1
 	var lock *SpinLock
 	lock = NewSpinLockWithType(BusyLoop)
-	benchmark(lock, r, b, o)
+	benchmarkSpinLock(lock, r, b, o)
 	lock = NewSpinLockWithType(NoBusyLoop)
-	benchmark(lock, r, b, o)
+	benchmarkSpinLock(lock, r, b, o)
 	lock = NewSpinLockWithType(Native)
-	benchmark(lock, r, b, o)
+	benchmarkSpinLock(lock, r, b, o)
 	lock = NewSpinLockWithType(ChannelBased)
-	benchmark(lock, r, b, o)
+	benchmarkSpinLock(lock, r, b, o)
 }
