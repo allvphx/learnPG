@@ -53,15 +53,18 @@ func benchmarkSpinLock(locker *SpinLock, nRoutine, nOperation, opLen int) {
 //Throughput is 10242722.93 op/s
 //Throughput is 4616589.37 op/s
 
+// The PG Contented lock seems to be beaten by spin lock (short instructions) or native lock (long instructions).
 func TestSpinLock(t *testing.T) {
-	r, b, o := 1, 10000, 1
+	concurrent, batch, instructs := 100, 10000, 10
 	var lock *SpinLock
 	lock = NewSpinLockWithType(BusyLoop)
-	benchmarkSpinLock(lock, r, b, o)
+	benchmarkSpinLock(lock, concurrent, batch, instructs)
 	lock = NewSpinLockWithType(NoBusyLoop)
-	benchmarkSpinLock(lock, r, b, o)
+	benchmarkSpinLock(lock, concurrent, batch, instructs)
 	lock = NewSpinLockWithType(Native)
-	benchmarkSpinLock(lock, r, b, o)
+	benchmarkSpinLock(lock, concurrent, batch, instructs)
 	lock = NewSpinLockWithType(ChannelBased)
-	benchmarkSpinLock(lock, r, b, o)
+	benchmarkSpinLock(lock, concurrent, batch, instructs)
+	lock = NewSpinLockWithType(PGContentedLock)
+	benchmarkSpinLock(lock, concurrent, batch, instructs)
 }

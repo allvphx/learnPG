@@ -17,6 +17,7 @@ const (
 	NoBusyLoop          = SpinLockType(1) // if we enable the explicit context switch for busy-loop goroutines, reducing CPU consumption.
 	ChannelBased        = SpinLockType(2)
 	Native              = SpinLockType(3) // native sync.Mutex
+	PGContentedLock     = SpinLockType(4) // native sync.Mutex
 	DefaultSpinLockType = NoBusyLoop
 	// after benchmarking, the NoBusyLoop is the best one for short instruction cases.
 
@@ -26,6 +27,10 @@ const (
 	SpinMinDelay          = time.Millisecond
 	SpinMaxDelay          = time.Second
 )
+
+var GlobalSpinProc = &Proc{
+	SpinsPerDelay: DefaultSpinsPerDelay,
+}
 
 // SpinLock is generally CPU-intensive as it continuously poll a condition.
 // They are only efficient in scenarios where the wait time is extremely short and
@@ -50,6 +55,8 @@ func NewSpinLockWithType(lockType SpinLockType) *SpinLock {
 		res.ch = make(chan struct{}, 1)
 	} else if lockType == Native {
 		res.lc = &sync.Mutex{}
+	} else if lockType == PGContentedLock {
+		res.state = atomic.Uint32{}
 	} else {
 		res.state = atomic.Uint32{}
 	}
@@ -61,6 +68,16 @@ func (c *SpinLock) Lock() {
 		c.ch <- struct{}{}
 	} else if c.lockType == Native {
 		c.lc.Lock()
+	} else if c.lockType == PGContentedLock {
+		delay := NewSpinDelayStatus(GlobalSpinProc)
+		for !c.state.CompareAndSwap(0, 1) {
+			// lock-free fetch failed, it indicates that we are likely to be in contented mode, use spin delay.
+			err := delay.PerformSpinDelay()
+			if err != nil {
+				panic(err)
+			}
+		}
+		delay.FinishSpinDelay()
 	} else {
 		for !c.state.CompareAndSwap(0, 1) {
 			if c.lockType == NoBusyLoop {
