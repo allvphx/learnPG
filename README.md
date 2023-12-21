@@ -24,7 +24,9 @@ Learning PostgreSQL by reimplementing some of its functions in Golang.
   - [x] lock tranches.
   - [x] wait list locks and lock flags.
 - [ ] Regular lock
-- [ ]
+- [ ] Tuple accesses
+- [ ] Implement 2PL and OCC on PG framework
+
 ### Lock-free
 - [ ] CAS lock-free queue.
 
