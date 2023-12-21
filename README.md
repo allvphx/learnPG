@@ -13,8 +13,16 @@ Learning PostgreSQL by reimplementing some of its functions in Golang.
 
 ## Storage
 ### Lock Manager
-- [x] Spin lock. (No deadlock, lock for a dozen instructions, no lock release on error, timeout in minutes (very long blocking))
-- [ ] Lightweight locks.
+- [x] Spin lock.
+  - Basic implementation: no deadlock, lock for a dozen instructions, no lock release on error, timeout in minutes (very long blocking)
+  - Spin lock delay controls for high contention locks.
+- [x] Basic PROC.
+  - [x] PROC list
+  - [x] Multable iterator
+- [x] Lightweight locks.
+  - [x] spin lock style FetchExecute, compiler barrels, etc.
+  - [x] lock tranches.
+  - [x] wait list locks and lock flags.
 - [ ] Regular lock
 - [ ]
 ### Lock-free

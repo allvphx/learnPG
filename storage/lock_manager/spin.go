@@ -2,9 +2,12 @@ package lock_manager
 
 import (
 	"LearnPG/errf"
+	"LearnPG/port"
+	"math/rand"
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type SpinLockType uint8
@@ -16,6 +19,12 @@ const (
 	Native              = SpinLockType(3) // native sync.Mutex
 	DefaultSpinLockType = NoBusyLoop
 	// after benchmarking, the NoBusyLoop is the best one for short instruction cases.
+
+	DefaultSpinsPerDelay  = 100
+	MinNumOfSpinPerDelays = 10
+	MaxNumOfSpinPerDelays = 100
+	SpinMinDelay          = time.Millisecond
+	SpinMaxDelay          = time.Second
 )
 
 // SpinLock is generally CPU-intensive as it continuously poll a condition.
@@ -69,5 +78,65 @@ func (c *SpinLock) Unlock() {
 	} else {
 		errf.Assert(c.state.CompareAndSwap(1, 0),
 			"Spin lock error: the spin lock is released without being locked")
+	}
+}
+
+type SpinDelayStatus struct {
+	Spins    int
+	Delays   time.Duration
+	CurDelay time.Duration
+	from     *Proc
+}
+
+func NewSpinDelayStatus(c *Proc) *SpinDelayStatus {
+	res := &SpinDelayStatus{
+		Spins:    c.SpinsPerDelay,
+		Delays:   0,
+		CurDelay: 0,
+		from:     c,
+	}
+	return res
+}
+
+// PerformSpinDelay wait while spinning on a contended spinlock.
+// This is only used for contented locks!
+func (c *SpinDelayStatus) PerformSpinDelay() error {
+	runtime.Gosched() // CPU-specific delay each time.
+	c.Spins++
+	if c.Spins >= c.from.SpinsPerDelay {
+		c.Delays++
+		if c.Delays > MaxNumOfSpinPerDelays {
+			return errf.ErrSpinStuck
+		}
+		if c.CurDelay == 0 {
+			c.CurDelay = SpinMinDelay
+		}
+		time.Sleep(c.CurDelay)
+		c.CurDelay += time.Duration(float64(c.CurDelay)*rand.Float64() + 0.5)
+		// 2x - 2.5x, add random to avoid repeat the block between locks.
+		if c.CurDelay > SpinMaxDelay {
+			// Avoid waiting for too long.
+			c.CurDelay = SpinMinDelay
+		}
+		c.Spins = 0
+	}
+	return nil
+}
+
+// FinishSpinDelay after managing to get the lock, we shall update on how long to loop.
+// Higher spin per delay indicates that we are confident the contention is low.
+// In case where the lock is "Acquired without delay", then we are good in parallel (low contention).
+// Otherwise, our contention is high, and we are in serial execution mode.
+func (c *SpinDelayStatus) FinishSpinDelay() {
+	if c.CurDelay == 0 {
+		// In case of no delay, we increase it rapidly since no delay indications multiprocessing mode.
+		if c.from.SpinsPerDelay < MaxNumOfSpinPerDelays {
+			c.from.SpinsPerDelay = port.MinInt(c.from.SpinsPerDelay+100, MaxNumOfSpinPerDelays)
+		}
+	} else {
+		// In case of delay, we decrease it slowly since delay indications (possible) serial mode.
+		if c.from.SpinsPerDelay > MaxNumOfSpinPerDelays {
+			c.from.SpinsPerDelay = port.MaxInt(c.from.SpinsPerDelay-1, MinNumOfSpinPerDelays)
+		}
 	}
 }
