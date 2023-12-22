@@ -23,6 +23,18 @@ func (head *ProcListHead) NewMultableIterator() *ProcListMutableIterator {
 	}
 }
 
+func (head *ProcListHead) PushHead(proc *Proc) {
+	node := &ProcListNode{value: proc}
+	if head.head == nil {
+		head.head = node
+		head.tail = node
+	} else {
+		node.next = head.head
+		head.head.prev = node
+		head.head = node
+	}
+}
+
 func (head *ProcListHead) PushTail(proc *Proc) {
 	node := &ProcListNode{value: proc}
 	if head.head == nil {
@@ -31,6 +43,7 @@ func (head *ProcListHead) PushTail(proc *Proc) {
 	} else {
 		node.prev = head.tail
 		head.tail.next = node
+		head.tail = node
 	}
 }
 
