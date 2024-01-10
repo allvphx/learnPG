@@ -400,13 +400,33 @@ func (c *LWLock) LWLockWaitForVar(ctx context.Context, oldValue uint64, value *u
 
 // LWLockUpdateVar the caller update the value and wake up all PROCs all call LWLockWaitForVar.
 func (c *LWLock) LWLockUpdateVar(ctx context.Context, value *uint64, newValue uint64) {
-	wakeUp := NewProcList()
+	wakeUpList := NewProcList()
 	c.LWLockWaitListLock(ctx)
 	errf.Assert(c.State.Load()&LWValueExclusive != 0,
 		"the function LWLockUpdateVar can only be called with exclusive lock")
-	c.LWLockWaitListUnlock()
 	*value = newValue
-	for it := wakeUp.NewMultableIterator(); it != nil; it = it.Next() {
+	// the wait until free waiters are placed at link head.
+	for it := c.Waiters.NewMultableIterator(); it != nil; it = it.Next() {
+		waiter := it.cur
+		if waiter.LWLockWaitMode != LWWaitUntilFree {
+			break
+		}
+		// wake all wait for value locks.
+		c.Waiters.Delete(it)
+		wakeUpList.PushTail(it.cur)
+	}
+	c.LWLockWaitListUnlock()
+
+	for it := wakeUpList.NewMultableIterator(); it != nil; it = it.Next() {
+		wakeUpList.Delete(it)
+
+		port.WriteBarrier()
+		// The waiter Proc shall be release only after its delete on list.
+		// Otherwise, the proc may get blocked again due to another get lock and enter queue again.
+
+		waiter := it.cur
+		waiter.LWWaiting = false
+		go waiter.Broadcast()
 	}
 }
 
