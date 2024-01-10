@@ -28,6 +28,12 @@ func AtomicFetchAndUint32(s *atomic.Uint32, and uint32) uint32 {
 	})
 }
 
+func AtomicFetchSubUint32(s *atomic.Uint32, sub uint32) uint32 {
+	return SpinStyleAtomicFetchAndModifyUint32(s, func(x uint32) uint32 {
+		return x - sub
+	})
+}
+
 var barrierTempValue = uint32(0)
 
 func WriteBarrier() {

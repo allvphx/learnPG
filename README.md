@@ -19,10 +19,11 @@ Learning PostgreSQL by reimplementing some of its functions in Golang.
 - [x] Basic PROC.
   - [x] PROC list
   - [x] Multable iterator
-- [ ] Lightweight locks.
+- [x] Lightweight locks.
   - [x] spin lock style FetchExecute, compiler barrels, etc.
   - [x] lock tranches.
   - [x] wait list locks and lock flags.
+  - [x] wait for values related functions.
 - [ ] Regular lock
 - [ ] Tuple accesses
 - [ ] Implement 2PL and OCC on PG framework
@@ -32,3 +33,4 @@ Learning PostgreSQL by reimplementing some of its functions in Golang.
 
 ## Extra
 - [ ] Cache line padding investigation.
+- [ ] Lock held by PROC related functions, and PROC lock cleaning.

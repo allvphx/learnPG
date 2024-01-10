@@ -306,10 +306,138 @@ func (c *LWLock) LWLockConditionAcquire(ctx context.Context, mode LWLockMode) bo
 	return mustWait
 }
 
-// LWLockAcquireOrWait acquire a lock, or wait until it is free.
+func (c *LWLock) LWLockReleaseMode(ctx context.Context, mode LWLockMode) {
+	var old uint32
+	if mode == LWExclusive {
+		old = port.AtomicFetchSubUint32(&c.State, LWValueExclusive)
+		if old&LWValueExclusive == 0 {
+			panic("invalid exclusive lock release")
+		}
+	} else if mode == LWShared {
+		old = port.AtomicFetchSubUint32(&c.State, LWValueShared)
+		if old&LWValueShared == 0 {
+			panic("invalid shared lock release")
+		}
+	} else {
+		panic("invalid mode to be released by current PROC")
+	}
+
+	if (old&LWFlagHasWaiters != 0) && (old&LWFlagCanRelease != 0) &&
+		(old&LWLockMask == 0) {
+		// if the current lock has pending waitors & no concurrent waitor list scan & the lock has been clean
+		// we wake up the procs in the waitor list.
+		c.LWLockWakeup(ctx)
+	}
+}
+
+///////////////////////// Lock wait for values related APIs ////////////////////////////////
+
+// LWLockAcquireOrWait acquire a lock, or wait until it is free and DO NOT lock.
+// the logic is strange, and it seems only needed for WALWriteLock.
+// to be implemented with write lock and page buffer.
 func (c *LWLock) LWLockAcquireOrWait(ctx *context.Context, mode LWLockMode) bool {
 	return false
 }
+
+// LWLockConflictsWithVar does the lock need to wait for value change, return Is lock free?
+// If current PROC still needs to wait?
+// case 3: we still need to wait for the update from lock holder. false, true
+func (c *LWLock) LWLockConflictsWithVar(ctx context.Context, oldValue uint64, value *uint64) (curValue uint64,
+	lockFree bool, needWait bool) {
+	// check the state atomically but not lock for it?
+	curValue = 0
+	if c.State.Load()&LWValueExclusive == 0 {
+		// case 1: current data is not locked, we directly return.
+		lockFree = true
+		needWait = false
+		return
+	}
+	lockFree = false
+	c.LWLockWaitListLock(ctx)
+	//case 2: current data is locked, but we do not need to wait since the data has changed since last time we saw it.
+	// --> false, false
+	curValue = *value
+	c.LWLockWaitListUnlock()
+	if curValue != oldValue {
+		return
+	} else {
+		needWait = true
+		return
+	}
+}
+
+// LWLockWaitForVar wait until the lock is free, or the value has been updated.
+func (c *LWLock) LWLockWaitForVar(ctx context.Context, oldValue uint64, value *uint64) (curValue uint64, res bool) {
+	proc := ctx.Value(ContextCurrentProc).(*Proc)
+	res = false
+	needWait := false
+	// interrupts barrel.
+
+	for {
+		curValue, _, needWait = c.LWLockConflictsWithVar(ctx, oldValue, value)
+		if !needWait {
+			break
+		}
+
+		///////////// BEGIN The code block is twice attempt.
+		c.LWLockQueueSelf(ctx, LWWaitUntilFree)
+		// ??? the can release flag can ensure current proc is woken as soon as the lock is released.
+		// How.
+		port.AtomicFetchOrUint32(&c.State, LWFlagCanRelease)
+		curValue, _, needWait = c.LWLockConflictsWithVar(ctx, oldValue, value)
+		if !needWait {
+			c.LWLockWaitListUnlock()
+			break
+		}
+		c.LWLockReportWaitStart()
+		proc.Wait()
+		c.LWLockReportWaitEnd()
+		///////////// END the twice attempt code block.
+		runtime.Gosched()
+	}
+	return
+}
+
+// LWLockUpdateVar the caller update the value and wake up all PROCs all call LWLockWaitForVar.
+func (c *LWLock) LWLockUpdateVar(ctx context.Context, value *uint64, newValue uint64) {
+	wakeUp := NewProcList()
+	c.LWLockWaitListLock(ctx)
+	errf.Assert(c.State.Load()&LWValueExclusive != 0,
+		"the function LWLockUpdateVar can only be called with exclusive lock")
+	c.LWLockWaitListUnlock()
+	*value = newValue
+	for it := wakeUp.NewMultableIterator(); it != nil; it = it.Next() {
+	}
+}
+
+func (c *LWLock) LWLockReleaseClearVar(ctx context.Context, value *uint64, resetValue uint64) {
+	c.LWLockWaitListLock(ctx)
+	// why the change of value needs the lock of wait list?
+	*value = resetValue
+	c.LWLockWaitListUnlock()
+	c.LWLockRelease()
+}
+
+///////////////////////// Held lock related APIs ////////////////////////////////
+
+func (c *LWLock) LWLockRelease() {
+	// check for the held lock stack and release the newest lock held for the current LWLock.
+}
+
+// LWLockReleaseAll release all locks held by current PROC. This is used for the lock cleaning after error.
+func (c *LWLock) LWLockReleaseAll() {
+}
+
+// LWLockHeldByMe if the current lock is held by current PROC.
+func (c *LWLock) LWLockHeldByMe() bool {
+	return false
+}
+
+func (c *LWLock) LWLockHeldByMeInMode(mode LWLockMode) bool {
+	return false
+}
+
+///////////////////////// Lock tranche related APIs ////////////////////////////////
 
 // NamedLWLockTranche the LWLock tranche request for named tranche.
 type NamedLWLockTranche struct {
