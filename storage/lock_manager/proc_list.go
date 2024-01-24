@@ -1,5 +1,7 @@
 package lock_manager
 
+import "sync"
+
 type ProcListNode struct {
 	prev  *ProcListNode
 	next  *ProcListNode
@@ -7,8 +9,9 @@ type ProcListNode struct {
 }
 
 type ProcListHead struct {
-	head *ProcListNode
-	tail *ProcListNode
+	latch sync.Mutex
+	head  *ProcListNode
+	tail  *ProcListNode
 }
 
 func NewProcList() *ProcListHead {
@@ -16,6 +19,8 @@ func NewProcList() *ProcListHead {
 }
 
 func (head *ProcListHead) NewMultableIterator() *ProcListMutableIterator {
+	head.latch.Lock()
+	defer head.latch.Unlock()
 	if head.head != nil {
 		return &ProcListMutableIterator{cur: head.head.value, next: head.head.next}
 	} else {
@@ -24,6 +29,8 @@ func (head *ProcListHead) NewMultableIterator() *ProcListMutableIterator {
 }
 
 func (head *ProcListHead) PushHead(proc *Proc) {
+	head.latch.Lock()
+	defer head.latch.Unlock()
 	node := &ProcListNode{value: proc}
 	if head.head == nil {
 		head.head = node
@@ -36,6 +43,8 @@ func (head *ProcListHead) PushHead(proc *Proc) {
 }
 
 func (head *ProcListHead) PushTail(proc *Proc) {
+	head.latch.Lock()
+	defer head.latch.Unlock()
 	node := &ProcListNode{value: proc}
 	if head.head == nil {
 		head.head = node
@@ -48,10 +57,14 @@ func (head *ProcListHead) PushTail(proc *Proc) {
 }
 
 func (head *ProcListHead) IsEmpty() bool {
+	head.latch.Lock()
+	defer head.latch.Unlock()
 	return head.head == nil
 }
 
 func (head *ProcListHead) Delete(c *ProcListMutableIterator) {
+	head.latch.Lock()
+	defer head.latch.Unlock()
 	if c.next == nil {
 		// current item is tail, update the tail node and head info.
 		head.tail = head.tail.prev
