@@ -6,7 +6,9 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strconv"
 	"sync/atomic"
+	"time"
 )
 
 type LWLockMode uint8
@@ -32,9 +34,33 @@ const (
 	LWWaitUntilFree = LWLockMode(2) // a special mode used for proc's LWLockMode.
 )
 
+func (c LWLockMode) String() string {
+	switch c {
+	case LWShared:
+		return "LWShared"
+	case LWExclusive:
+		return "LWExclusive"
+	case LWWaitUntilFree:
+		return "LWWaitUntilFree"
+	default:
+		panic("invalid LW lock mode")
+	}
+}
+
 type lwDebugger struct {
 	NWaiters atomic.Uint32
 	Owner    *Routine
+}
+
+func LWDebug(pid uint32, c *LWLock, format string, a ...interface{}) {
+	if !errf.EnableLockDebug {
+		return
+	}
+	println("LW debugging")
+	curFlag := c.String()
+	fmt.Printf(time.Now().Format("15:04:05.00")+
+		"; "+"PROC "+strconv.FormatUint(uint64(pid), 10)+
+		":"+format+"; lock_flags="+curFlag+"\n", a...)
 }
 
 // LWLock lightweight lock that protect internal state with spin-locks.
@@ -57,7 +83,7 @@ type LWLock struct {
 }
 
 func (c *LWLock) Info(ctx context.Context) {
-	fmt.Printf("PROC %d with lock flag %s\n", ctx.Value(ContextCurrentProc).(*Proc).ProcID, c.String())
+	LWDebug(ctx.Value(ContextCurrentProc).(*Proc).ProcID, c, "with lock flag")
 }
 
 func (c *LWLock) String() string {
@@ -70,11 +96,13 @@ func (c *LWLock) String() string {
 	waiter := "["
 	for it := c.Waiters.NewMultableIterator(); it != nil; it = it.Next() {
 		// wake all wait for value locks.
+		println("what happened?")
 		waiter = waiter + fmt.Sprintf("%s,", it.cur.String())
 	}
 	waiter += "]"
-	//errf.Jprint(waiter)
-	return fmt.Sprintf("{tranche:%d,has_waiters:%v,can_release:%v,is_locked:%v,is_write:%v,read_count:%d,water_list:%s}",
+	return fmt.Sprintf("{tranche:%d,has_waiters:%v,"+
+		"can_release:%v,is_locked:%v,is_write:%v,"+
+		"read_count:%d,water_list:%s}",
 		c.Tranche,
 		hasWaiters,
 		canRelease,
@@ -138,19 +166,19 @@ func (c *LWLock) LWLockAcquire(ctx context.Context, mode LWLockMode) bool {
 	waitCount := 0
 
 	proc := ctx.Value(ContextCurrentProc).(*Proc)
-
-	fmt.Printf("PROC %d, --------------------------- START ---------------------\n", proc.ProcID)
+	LWDebug(ctx.Value(ContextCurrentProc).(*Proc).ProcID, c, "LWLockAcquire start")
 
 	for {
 		//fmt.Printf("PROC %v, current lock is %v\n", proc.ProcID, c.String())
 		needWait := c.LWLockAttemptLock(mode)
 		if !needWait { // success
-			fmt.Printf("PROC %v, succeed with flags %v\n", proc.ProcID, c.String())
+			LWDebug(proc.ProcID, c, "succeed direct lock")
 			break
 		}
 
+		LWDebug(proc.ProcID, c, "failed direct lock")
 		c.lockQueueSelf(ctx, mode)
-		fmt.Printf("PROC %d, fail for flags %s\n", proc.ProcID, c.String())
+		LWDebug(proc.ProcID, c, "succeed in queue self")
 		// by placing the PROC inside queue, we are guaranteed to be woken up when necessary.
 
 		/// --- WOKEN UP ---
@@ -158,24 +186,23 @@ func (c *LWLock) LWLockAcquire(ctx context.Context, mode LWLockMode) bool {
 		needWait = c.LWLockAttemptLock(mode)
 		if !needWait {
 			// succeed!
-			fmt.Printf("PROC %v, succeed with flags %v\n", proc.ProcID, c.String())
+			LWDebug(proc.ProcID, c, "succeed in queue self attempt")
 			c.lockDequeueSelf(ctx)
 			break
 		}
 		//c.Info()
 		c.lockReportWaitStart()
 		for {
-			//c.Info(ctx)
-			proc.SemaphoreLock()
-			if !proc.LWWaiting {
-				fmt.Printf("PROC %v, got sem!! (%v round(s))\n", proc.ProcID, waitCount)
+			proc.Sem.Lock()
+			if !proc.IsWaiting() {
+				LWDebug(proc.ProcID, c, "manage to get Sem in LWLockAcquire")
 				break
 			}
 			waitCount++
 			fmt.Printf("PROC %v, waiting!! (%v round(s))\n", proc.ProcID, waitCount)
 		}
 		//proc.Wait()
-		errf.Assert(!proc.LWWaiting, "the wait sem should only be obtained after the wakeup finish")
+		errf.Assert(!proc.IsWaiting(), "the wait Sem should only be obtained after the wakeup finish")
 
 		// TODO: release block?
 		port.AtomicFetchOrUint32(&c.State, LWFlagCanRelease)
@@ -184,9 +211,11 @@ func (c *LWLock) LWLockAcquire(ctx context.Context, mode LWLockMode) bool {
 		noWait = false
 	}
 
-	proc.Broadcast()
+	for ; waitCount > 0; waitCount-- {
+		proc.Sem.UnLock()
+	}
 
-	fmt.Printf("PROC %d, --------------------------- FIN ---------------------\n", proc.ProcID)
+	LWDebug(ctx.Value(ContextCurrentProc).(*Proc).ProcID, c, "LWLockAcquire finished")
 
 	// TODO: update and maintain heldLWLock list.
 	return noWait
@@ -204,8 +233,8 @@ func (c *LWLock) LWLockConditionAcquire(ctx context.Context, mode LWLockMode) bo
 func (c *LWLock) LWLockReleaseMode(ctx context.Context, mode LWLockMode) {
 	var old uint32
 
-	fmt.Printf("PROC %v, releasing lock flags %v\n",
-		ctx.Value(ContextCurrentProc).(*Proc).ProcID, c.String())
+	LWDebug(ctx.Value(ContextCurrentProc).(*Proc).ProcID,
+		c, "LWLockReleaseMode %v start", mode.String())
 	if mode == LWExclusive {
 		old = port.AtomicFetchSubUint32(&c.State, LWValueExclusive)
 		if old&LWValueExclusive == 0 {
@@ -256,7 +285,7 @@ func (c *LWLock) LWLockConflictsWithVar(ctx context.Context, oldValue uint64, va
 	//case 2: current data is locked, but we do not need to wait since the data has changed since last time we saw it.
 	// --> false, false
 	curValue = *value
-	c.waitListUnlock()
+	c.waitListUnlock(ctx)
 	if curValue != oldValue {
 		return
 	} else {
@@ -285,11 +314,11 @@ func (c *LWLock) LWLockWaitForVar(ctx context.Context, oldValue uint64, value *u
 		port.AtomicFetchOrUint32(&c.State, LWFlagCanRelease)
 		curValue, _, needWait = c.LWLockConflictsWithVar(ctx, oldValue, value)
 		if !needWait {
-			c.waitListUnlock()
+			c.waitListUnlock(ctx)
 			break
 		}
 		c.lockReportWaitStart()
-		proc.Wait()
+		proc.Sem.Lock()
 		c.lockReportWaitEnd()
 		///////////// END the twice attempt code block.
 		runtime.Gosched()
@@ -314,7 +343,7 @@ func (c *LWLock) LWLockUpdateVar(ctx context.Context, value *uint64, newValue ui
 		c.Waiters.Delete(it)
 		wakeUpList.PushTail(it.cur)
 	}
-	c.waitListUnlock()
+	c.waitListUnlock(ctx)
 
 	for it := wakeUpList.NewMultableIterator(); it != nil; it = it.Next() {
 		wakeUpList.Delete(it)
@@ -324,8 +353,8 @@ func (c *LWLock) LWLockUpdateVar(ctx context.Context, value *uint64, newValue ui
 		// Otherwise, the proc may get blocked again due to another get lock and enter queue again.
 
 		waiter := it.cur
-		waiter.LWWaiting = false
-		waiter.Broadcast()
+		waiter.SetWaiting(false)
+		waiter.Sem.UnLock()
 	}
 }
 
@@ -333,7 +362,7 @@ func (c *LWLock) LWLockReleaseClearVar(ctx context.Context, value *uint64, reset
 	c.waitListLock(ctx)
 	// why the change of value needs the lock of wait list?
 	*value = resetValue
-	c.waitListUnlock()
+	c.waitListUnlock(ctx)
 	c.LWLockRelease()
 }
 
@@ -342,6 +371,8 @@ func (c *LWLock) LWLockReleaseClearVar(ctx context.Context, value *uint64, reset
 // waitListLock lock the wait list against concurrent activities from other Proc.
 // Such mutex lock time should be short.
 func (c *LWLock) waitListLock(ctx context.Context) {
+	LWDebug(ctx.Value(ContextCurrentProc).(*Proc).ProcID,
+		c, "trying to get queue lock")
 	for {
 		oldState := port.AtomicFetchOrUint32(&c.State, LWFlagLocked)
 		if (oldState & LWFlagLocked) == 0 {
@@ -359,19 +390,23 @@ func (c *LWLock) waitListLock(ctx context.Context) {
 			oldState = c.State.Load()
 		}
 	}
+	LWDebug(ctx.Value(ContextCurrentProc).(*Proc).ProcID,
+		c, "got queue lock")
 }
 
-func (c *LWLock) waitListUnlock() {
+func (c *LWLock) waitListUnlock(ctx context.Context) {
 	oldState := port.AtomicFetchAndUint32(&c.State, ^LWFlagLocked)
+	LWDebug(ctx.Value(ContextCurrentProc).(*Proc).ProcID,
+		c, "wait list unlocked")
 	errf.Assert(oldState&LWFlagLocked != 0, "waitListUnlock encounters unlocked item")
 }
 
 // lockWakeup wake up all lockers that could acquire the lock.
 func (c *LWLock) lockWakeup(ctx context.Context) {
 	releasedWaiters := NewProcList()
+	LWDebug(ctx.Value(ContextCurrentProc).(*Proc).ProcID,
+		c, "lock wake up start")
 	c.waitListLock(ctx)
-	fmt.Printf("PROC %v, waking up waitors %v\n",
-		ctx.Value(ContextCurrentProc).(*Proc).ProcID, c.String())
 	someOneWoken := false
 	canRelease := true
 
@@ -427,12 +462,10 @@ func (c *LWLock) lockWakeup(ctx context.Context) {
 		// Otherwise, the proc may get blocked again due to another get lock and enter queue again.
 
 		waiter := it.cur
-		waiter.latch.Lock()
-		waiter.LWWaiting = false
-		waiter.latch.Unlock()
-		fmt.Printf("PROC %d waking up PROC %d\n", ctx.Value(ContextCurrentProc).(*Proc).ProcID,
-			waiter.ProcID)
-		waiter.Broadcast()
+		waiter.SetWaiting(false)
+		LWDebug(ctx.Value(ContextCurrentProc).(*Proc).ProcID,
+			c, "waking up PROC %v", waiter.ProcID)
+		waiter.Sem.UnLock()
 	}
 }
 
@@ -442,7 +475,7 @@ func (c *LWLock) lockQueueSelf(ctx context.Context, mode LWLockMode) {
 	if proc == nil {
 		panic("cannot wait without proc")
 	}
-	if proc.LWWaiting {
+	if proc.IsWaiting() {
 		panic("queueing for lock while waiting on another one")
 	}
 
@@ -450,28 +483,36 @@ func (c *LWLock) lockQueueSelf(ctx context.Context, mode LWLockMode) {
 	// set the flag to protect the queue
 	port.AtomicFetchOrUint32(&c.State, LWFlagHasWaiters)
 
-	proc.LWWaiting = true
+	proc.SetWaiting(true)
 	proc.LWLockWaitMode = mode
+
+	LWDebug(ctx.Value(ContextCurrentProc).(*Proc).ProcID,
+		c, "queuing self with mode %v", mode.String())
 
 	if mode == LWWaitUntilFree {
 		// the wait until free is always placed at the front of the list.
 		c.Waiters.PushHead(proc)
 	} else {
+		LWDebug(ctx.Value(ContextCurrentProc).(*Proc).ProcID,
+			c, "queuing push tail begin")
 		c.Waiters.PushTail(proc)
 	}
+	LWDebug(ctx.Value(ContextCurrentProc).(*Proc).ProcID,
+		c, "queuing self finished")
 
-	c.waitListUnlock()
+	c.waitListUnlock(ctx)
 }
 
 // lockDequeueSelf remove current Proc from the wait queue
 func (c *LWLock) lockDequeueSelf(ctx context.Context) {
 	found := false
+
 	c.waitListLock(ctx)
 	proc := ctx.Value(ContextCurrentProc).(*Proc)
 
 	for it := c.Waiters.NewMultableIterator(); it != nil; it = it.Next() {
 		// find the proc and remove it.
-		if it.cur.ProcID == proc.ProcID {
+		if it.cur == proc {
 			found = true
 			c.Waiters.Delete(it)
 			break
@@ -482,18 +523,33 @@ func (c *LWLock) lockDequeueSelf(ctx context.Context) {
 		port.AtomicFetchAndUint32(&c.State, ^LWFlagHasWaiters)
 	}
 
-	c.waitListUnlock()
+	c.waitListUnlock(ctx)
+	waitCount := 0
 
 	// dangerous zone: protected by wait semaphore on PROC.
 
 	if found {
 		// normal case.
-		proc.LWWaiting = false
+		proc.SetWaiting(false)
 	} else {
-		// someone else has dequeued current proc from waiter list and will wake up current routine.
-		// Golang does not need to deal with signal absorb, just return.
+		// someone else has dequeued current proc from waiter list and will wake up current proc.
+		// Deal with the superfluous absorption of a wakeup !!!
+		//panic("???")
 
 		port.AtomicFetchOrUint32(&c.State, LWFlagCanRelease)
+		for {
+			proc.Sem.Lock()
+			if !proc.IsWaiting() {
+				break
+			}
+			waitCount++
+		}
+		errf.Assert(!proc.IsWaiting(), "the wait Sem should only be obtained after the wakeup finish")
+
+		for waitCount > 0 {
+			proc.Sem.UnLock()
+			waitCount--
+		}
 	}
 }
 
@@ -609,4 +665,6 @@ func (c *LWLockManager) InitLWLocks() {
 	errf.Assert(offset == c.Size(), "incorrect offset calculation in InitLWLocks")
 }
 
-func (c *LWLockManager) RegisterLWLockTranches() {}
+func (c *LWLockManager) RegisterLWLockTranches() {
+
+}

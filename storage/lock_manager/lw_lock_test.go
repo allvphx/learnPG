@@ -61,7 +61,7 @@ func benchmarkLWLock(locker *LWLock, nRoutine, nOperation, opLen int) {
 }
 
 func TestLWLockAcquire(t *testing.T) {
-	concurrent, batch, instructs := 2, 100, 10
+	concurrent, batch, instructs := 100, 100, 10
 	c := &LWLock{}
 	c.Init(0)
 	benchmarkLWLock(c, concurrent, batch, instructs)

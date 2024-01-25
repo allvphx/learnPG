@@ -1,7 +1,5 @@
 package lock_manager
 
-import "sync"
-
 type ProcListNode struct {
 	prev  *ProcListNode
 	next  *ProcListNode
@@ -9,13 +7,13 @@ type ProcListNode struct {
 }
 
 type ProcListHead struct {
-	latch sync.Mutex
+	latch *SpinLock
 	head  *ProcListNode
 	tail  *ProcListNode
 }
 
 func NewProcList() *ProcListHead {
-	return &ProcListHead{}
+	return &ProcListHead{latch: NewSpinLock()}
 }
 
 func (head *ProcListHead) NewMultableIterator() *ProcListMutableIterator {
@@ -103,7 +101,7 @@ type ProcListMutableIterator struct {
 
 func (c *ProcListMutableIterator) Next() *ProcListMutableIterator {
 	if c.next != nil {
-		return &ProcListMutableIterator{c.next.value, c.next}
+		return &ProcListMutableIterator{c.next.value, c.next.next}
 	} else {
 		return nil
 	}

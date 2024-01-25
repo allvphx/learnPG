@@ -3,53 +3,51 @@ package lock_manager
 import (
 	"LearnPG/errf"
 	"fmt"
+	"strconv"
 	"sync"
+	"time"
 )
 
 // Proc storage the local variables inside a goroutine.
 type Proc struct {
 	ProcID         uint32
 	latch          *sync.Mutex
-	sem            *sync.Cond
+	Sem            *Semaphore
 	SpinsPerDelay  int
 	LWLockWaitMode LWLockMode
 	LWWaiting      bool
 }
 
-func (c *Proc) String() string {
-	c.latch.Lock()
-	defer c.latch.Unlock()
-	return errf.AsJson(c)
+func (c *Proc) Debug(format string, a ...interface{}) {
+	if !errf.EnableProcDebug {
+		return
+	}
+	curFlag := c.String()
+	fmt.Printf(time.Now().Format("15:04:05.00")+"; "+
+		"PROC "+strconv.FormatUint(uint64(c.ProcID), 10)+":"+format+
+		"; proc_flags="+curFlag+"\n", a...)
 }
 
-func (c *Proc) SemaphoreLock() {
-	c.latch.Lock()
-	defer c.latch.Unlock()
-	fmt.Printf("PROC %v requests for sem.\n", c.ProcID)
-	c.sem.Wait()
-	fmt.Printf("PROC %v gets sem to continue.\n", c.ProcID)
-}
-
-func (c *Proc) SemaphoreUnlock() {
+func (c *Proc) SetWaiting(to bool) {
 	//c.latch.Lock()
 	//defer c.latch.Unlock()
-	fmt.Printf("PROC %v add sem.\n", c.ProcID)
-	c.sem.Signal()
+	c.LWWaiting = to
 }
 
-func (c *Proc) Broadcast() {
-	fmt.Printf("PROC %v broadcasting signal!!\n", c.ProcID)
-	c.sem.Broadcast()
+func (c *Proc) IsWaiting() bool {
+	//c.latch.Lock()
+	//defer c.latch.Unlock()
+	return c.LWWaiting
 }
 
-func (c *Proc) Wait() {
-	c.latch.Lock()
-	defer c.latch.Unlock()
-	for c.LWWaiting {
-		fmt.Printf("Blocked on PROC %v\n", c.ProcID)
-		c.sem.Wait()
-	}
-	fmt.Printf("Blocked released wow!!!! %v\n", c.ProcID)
+func (c *Proc) String() string {
+	//c.latch.Lock()
+	//defer c.latch.Unlock()
+	return fmt.Sprintf("{pid:%v,sem_cnt:%v,spin_per_delay:%v,wait_mode:%v}",
+		c.ProcID,
+		c.Sem.savedSignal,
+		c.SpinsPerDelay,
+		c.LWLockWaitMode.String())
 }
 
 type ProcGlobal struct {
@@ -75,7 +73,7 @@ func NewProc() *Proc {
 		ProcID:         globalProcID,
 	}
 	globalProcID++
-	res.sem = sync.NewCond(res.latch)
+	res.Sem = NewSemaphore(res.latch, res)
 	if globalProc == nil {
 		globalProc = &ProcGlobal{
 			AllProc: make([]*Proc, 0),
