@@ -20,6 +20,8 @@ const (
 	LWFixedLockMark   = 0
 
 	LWFlagHasWaiters = uint32(1 << 30)
+	// LWFlagCanRelease flag is true when it is possible for a waiting PROC
+	// (inside wait list) to continue.
 	LWFlagCanRelease = uint32(1 << 29)
 	LWFlagLocked     = uint32(1 << 28)
 
@@ -209,6 +211,7 @@ func (c *LWLock) LWLockAcquire(ctx context.Context, mode LWLockMode) bool {
 		c.lockReportWaitEnd()
 
 		noWait = false
+		runtime.Gosched()
 	}
 
 	for ; waitCount > 0; waitCount-- {
@@ -226,8 +229,8 @@ func (c *LWLock) LWLockConditionAcquire(ctx context.Context, mode LWLockMode) bo
 	errf.Assert(mode == LWShared || mode == LWExclusive, "invalid lock")
 	mustWait := c.LWLockAttemptLock(mode)
 	// TODO: maintain the held lw lock list
-	// TODO: check if we need interrupt barrels.
-	return mustWait
+	ctx.Value(ContextCurrentProc).(*Proc).InterruptBarrel()
+	return !mustWait
 }
 
 func (c *LWLock) LWLockReleaseMode(ctx context.Context, mode LWLockMode) {
@@ -267,23 +270,21 @@ func (c *LWLock) LWLockAcquireOrWait(ctx *context.Context, mode LWLockMode) bool
 	return false
 }
 
-// LWLockConflictsWithVar does the lock need to wait for value change, return Is lock free?
-// If current PROC still needs to wait?
-// case 3: we still need to wait for the update from lock holder. false, true
+// LWLockConflictsWithVar check is the WaitForUpdate lock free now?
 func (c *LWLock) LWLockConflictsWithVar(ctx context.Context, oldValue uint64, value *uint64) (curValue uint64,
 	lockFree bool, needWait bool) {
 	// check the state atomically but not lock for it?
 	curValue = 0
 	if c.State.Load()&LWValueExclusive == 0 {
-		// case 1: current data is not locked, we directly return.
+		// case 1: no one is modifying current, we directly return.
 		lockFree = true
 		needWait = false
 		return
 	}
 	lockFree = false
-	c.waitListLock(ctx)
-	//case 2: current data is locked, but we do not need to wait since the data has changed since last time we saw it.
-	// --> false, false
+	c.waitListLock(ctx) // the wait list lock blocks the newly coming requests for WaitForUpdate.
+	// case 2: current data is locked, but we do not need to wait since
+	// the data has changed since last time we saw it.
 	curValue = *value
 	c.waitListUnlock(ctx)
 	if curValue != oldValue {
@@ -299,7 +300,7 @@ func (c *LWLock) LWLockWaitForVar(ctx context.Context, oldValue uint64, value *u
 	proc := ctx.Value(ContextCurrentProc).(*Proc)
 	res = false
 	needWait := false
-	// interrupts barrel.
+	proc.InterruptBarrel()
 
 	for {
 		curValue, _, needWait = c.LWLockConflictsWithVar(ctx, oldValue, value)
@@ -309,8 +310,8 @@ func (c *LWLock) LWLockWaitForVar(ctx context.Context, oldValue uint64, value *u
 
 		///////////// BEGIN The code block is twice attempt.
 		c.lockQueueSelf(ctx, LWWaitUntilFree)
-		// ??? the can release flag can ensure current proc is woken as soon as the lock is released.
-		// How.
+		// the can release flag can ensure current proc is woken as soon as the
+		// exclusive lock is released (which indicates a update just finished).
 		port.AtomicFetchOrUint32(&c.State, LWFlagCanRelease)
 		curValue, _, needWait = c.LWLockConflictsWithVar(ctx, oldValue, value)
 		if !needWait {
@@ -320,23 +321,21 @@ func (c *LWLock) LWLockWaitForVar(ctx context.Context, oldValue uint64, value *u
 		c.lockReportWaitStart()
 		proc.Sem.Lock()
 		c.lockReportWaitEnd()
-		///////////// END the twice attempt code block.
-		runtime.Gosched()
 	}
 	return
 }
 
-// LWLockUpdateVar the caller update the value and wake up all PROCs all call LWLockWaitForVar.
+// LWLockUpdateVar the caller update the value and wake up all PROCs blocked on LWLockWaitForVar.
 func (c *LWLock) LWLockUpdateVar(ctx context.Context, value *uint64, newValue uint64) {
 	wakeUpList := NewProcList()
 	c.waitListLock(ctx)
 	errf.Assert(c.State.Load()&LWValueExclusive != 0,
 		"the function LWLockUpdateVar can only be called with exclusive lock")
 	*value = newValue
-	// the wait until free waiters are placed at link head.
 	for it := c.Waiters.NewMultableIterator(); it != nil; it = it.Next() {
 		waiter := it.cur
 		if waiter.LWLockWaitMode != LWWaitUntilFree {
+			// the WaitUntilFree waiters are placed at link head.
 			break
 		}
 		// wake all wait for value locks.
@@ -358,9 +357,9 @@ func (c *LWLock) LWLockUpdateVar(ctx context.Context, value *uint64, newValue ui
 	}
 }
 
+// LWLockReleaseClearVar release the lock and reset its value to resetValue.
 func (c *LWLock) LWLockReleaseClearVar(ctx context.Context, value *uint64, resetValue uint64) {
 	c.waitListLock(ctx)
-	// why the change of value needs the lock of wait list?
 	*value = resetValue
 	c.waitListUnlock(ctx)
 	c.LWLockRelease()
@@ -389,6 +388,7 @@ func (c *LWLock) waitListLock(ctx context.Context) {
 			}
 			oldState = c.State.Load()
 		}
+		runtime.Gosched()
 	}
 	LWDebug(ctx.Value(ContextCurrentProc).(*Proc).ProcID,
 		c, "got queue lock")
@@ -557,7 +557,7 @@ func (c *LWLock) lockDequeueSelf(ctx context.Context) {
 func (c *LWLock) lockReportWaitStart() {}
 func (c *LWLock) lockReportWaitEnd()   {}
 
-// for test only, this api does not introduce the lock waiting overhead.
+// lockReleaseNoWakeUp for test only, this api does not introduce the lock waiting overhead.
 func (c *LWLock) lockReleaseNoWakeUp(mode LWLockMode) {
 	var old uint32
 	if mode == LWExclusive {
@@ -571,7 +571,7 @@ func (c *LWLock) lockReleaseNoWakeUp(mode LWLockMode) {
 			panic("invalid shared lock release")
 		}
 	} else {
-		panic("invalid mode to be released by current PROC")
+		panic("invalid mode to  be released by current PROC")
 	}
 }
 

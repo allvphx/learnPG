@@ -40,6 +40,10 @@ func (c *Proc) IsWaiting() bool {
 	return c.LWWaiting
 }
 
+func (c *Proc) InterruptBarrel() {
+	// to be implemented
+}
+
 func (c *Proc) String() string {
 	//c.latch.Lock()
 	//defer c.latch.Unlock()
