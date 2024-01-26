@@ -242,7 +242,7 @@ func (c *LWLock) LWLockReleaseMode(ctx context.Context, mode LWLockMode) {
 		}
 	} else if mode == LWShared {
 		old = port.AtomicFetchSubUint32(&c.State, LWValueShared)
-		if old&LWValueShared == 0 {
+		if old&LWSharedMask == 0 {
 			panic("invalid shared lock release")
 		}
 	} else {

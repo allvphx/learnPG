@@ -30,7 +30,7 @@ func TestLWLockAttemptLock(t *testing.T) {
 	assert.True(t, c.LWLockAttemptLock(LWExclusive))
 }
 
-func benchmarkLWLock(locker *LWLock, nRoutine, nOperation, opLen int) {
+func benchmarkLWLock(locker *LWLock, nRoutine, nOperation, opLen int, readPercentage float64) {
 	wg := sync.WaitGroup{}
 	start := time.Now()
 	sharedValue := 0
@@ -43,14 +43,21 @@ func benchmarkLWLock(locker *LWLock, nRoutine, nOperation, opLen int) {
 			randGen := rand.NewSource(int64(op))
 			for j := 0; j < nOperation; j++ {
 				mode := LWExclusive //LWLockMode(1 - (rand.Int()%10)/8)
+				if rand.Float64() <= readPercentage {
+					mode = LWShared
+				}
 				locker.LWLockAcquire(ctx, mode)
+				readSum := 0
 				for k := 0; k < opLen; k++ {
-					*value += int(randGen.Int63() * (randGen.Int63()%3 - 1))
+					if mode == LWExclusive {
+						*value += int(randGen.Int63() * (randGen.Int63()%3 - 1))
+					} else {
+						readSum += *value
+					}
 				}
 				locker.LWLockReleaseMode(ctx, mode)
 			}
-			fmt.Printf("PROC %d done.\n", proc.ProcID)
-
+			//fmt.Printf("PROC %d done.\n", proc.ProcID)
 			wg.Done()
 		}(i, locker, &sharedValue)
 	}
@@ -60,9 +67,14 @@ func benchmarkLWLock(locker *LWLock, nRoutine, nOperation, opLen int) {
 	fmt.Printf("Throughput is %.2f op/s\n", float64(nRoutine)*float64(nOperation)/cost)
 }
 
+// Even in exclusive mode, LW lock is better than all types
+// of spin locks for long instructions (close to channel lock).
+// Its advantage becomes larger when considering the read operations.
 func TestLWLockAcquire(t *testing.T) {
-	concurrent, batch, instructs := 100, 100, 10
+	concurrent, batch, instructs := 32, 100, 1000
 	c := &LWLock{}
 	c.Init(0)
-	benchmarkLWLock(c, concurrent, batch, instructs)
+	benchmarkLWLock(c, concurrent, batch, instructs, 0)
+	benchmarkLWLock(c, concurrent, batch, instructs, 0.5)
+	benchmarkLWLock(c, concurrent, batch, instructs, 1)
 }
