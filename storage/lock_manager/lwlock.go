@@ -577,6 +577,9 @@ func (c *LWLock) lockReleaseNoWakeUp(mode LWLockMode) {
 
 ///////////////////////// Held lock related APIs ////////////////////////////////
 
+type LWLockHandle struct {
+}
+
 func (c *LWLock) LWLockRelease() {
 	// check for the held lock stack and release the newest lock held for the current LWLock.
 }
